@@ -2,13 +2,23 @@ from __future__ import division
 
 import numpy as np
 
-from keras import  initializations, regularizers, constraints
-from keras import backend as K 
-from keras.layers.core import Layer, Dense
+import copy
+import inspect
+import types as python_types
+import marshal
+import sys
+import warnings
+
+from keras import activations, initializations, regularizers, constraints
+from keras import backend as K
+from keras.engine import InputSpec, Layer
+from keras.layers.core import Dense
+from keras_extensions.initializations import glorot_uniform_sigm 
 
 from .backend import random_binomial
 
 import theano
+import theano.tensor as T
 
 class RBM(Layer):
     """
@@ -18,122 +28,121 @@ class RBM(Layer):
     # keras.core.Layer part (modified from keras.core.Dense)
     # ------------------------------------------------------
 
-    def __init__(self, input_dim, hidden_dim, init='glorot_uniform', weights=None, name=None,
-                 W_regularizer=None, bx_regularizer=None, bh_regularizer=None, #activity_regularizer=None,
-                 W_constraint=None, bx_constraint=None, bh_constraint=None):
+    def __init__(self, hidden_dim, init='glorot_uniform', 
+		activation='sigmoid', weights=None, 
+		W_regularizer=None, bx_regularizer=None, bh_regularizer=None, 
+		activity_regularizer=None,
+                W_constraint=None, bx_constraint=None, bh_constraint=None,
+		input_dim=None, nb_gibbs_steps=1, persistent=False, batch_size=1,
+		scaling_h_given_x=1.0, scaling_x_given_h=1.0,
+		**kwargs):
 
-        super(RBM, self).__init__()
+	self.nb_gibbs_steps=nb_gibbs_steps
+
+        self.updates = []
         self.init = initializations.get(init)
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
+        self.activation = activations.get(activation)
+	self.hidden_dim = hidden_dim
+	self.input_dim = input_dim
+	self.batch_size = batch_size
+	
+	self.scaling_h_given_x = scaling_h_given_x
+	self.scaling_x_given_h = scaling_x_given_h
 
-        self.input = K.placeholder(ndim = 2)
-        self.W = self.init((self.input_dim, self.hidden_dim))
-        self.bx = K.zeros((self.input_dim))
-        self.bh = K.zeros((self.hidden_dim))
+	self.W_regularizer = regularizers.get(W_regularizer)
+	self.bx_regularizer = regularizers.get(bx_regularizer)
+        self.bh_regularizer = regularizers.get(bh_regularizer)
+        self.activity_regularizer = regularizers.get(activity_regularizer)
 
-        self.params = [self.W, self.bx, self.bh]
+        self.W_constraint = constraints.get(W_constraint)
+        self.bx_constraint = constraints.get(bx_constraint)
+	self.bh_constraint = constraints.get(bh_constraint)
+	
+	self.initial_weights = weights
+	self.input_spec = [InputSpec(ndim=2)]
+	
+	if self.input_dim:
+            kwargs['input_shape'] = (self.input_dim,)
+        super(RBM, self).__init__(**kwargs)
 
-        self.regularizers = []
-        self.W_regularizer = regularizers.get(W_regularizer)
+	self.W = self.init((input_dim, self.hidden_dim),
+			    name='{}_W'.format(self.name))
+        self.bx = K.zeros((self.input_dim),
+			   name='{}_bx'.format(self.name))
+        self.bh = K.zeros((self.hidden_dim),
+			   name='{}_bh'.format(self.name))
+
+	self.trainable_weights = [self.W, self.bx, self.bh]
+	
+	self.is_persistent = persistent
+	if(self.is_persistent):
+		self.persistent_chain = theano.shared(np.zeros((self.batch_size, self.input_dim), dtype=theano.config.floatX), borrow=True)
+
+    def build(self, input_shape):
+	assert len(input_shape) == 2
+       	input_dim = input_shape[1]
+        self.input_spec = [InputSpec(dtype=K.floatx(),
+                                     shape=(None, input_dim))]
+        #self.trainable_weights = [self.W, self.bx, self.bh]
+
+	self.regularizers = []
         if self.W_regularizer:
             self.W_regularizer.set_param(self.W)
             self.regularizers.append(self.W_regularizer)
 
-        self.bx_regularizer = regularizers.get(bx_regularizer)
         if self.bx_regularizer:
             self.bx_regularizer.set_param(self.bx)
             self.regularizers.append(self.bx_regularizer)
 
-        self.bh_regularizer = regularizers.get(bh_regularizer)
-        if self.bh_regularizer:
+	if self.bh_regularizer:
             self.bh_regularizer.set_param(self.bh)
             self.regularizers.append(self.bh_regularizer)
 
-        #self.activity_regularizer = regularizers.get(activity_regularizer)
-        #if self.activity_regularizer:
-        #    self.activity_regularizer.set_layer(self)
-        #    self.regularizers.append(self.activity_regularizer)
+        if self.activity_regularizer:
+            self.activity_regularizer.set_layer(self)
+            self.regularizers.append(self.activity_regularizer)
 
-        self.W_constraint = constraints.get(W_constraint)
-        self.bx_constraint = constraints.get(bx_constraint)
-        self.bh_constraint = constraints.get(bh_constraint)
-        self.constraints = [self.W_constraint, self.bx_constraint, self.bh_constraint]
+        self.constraints = {}
+        if self.W_constraint:
+            self.constraints[self.W] = self.W_constraint
+        
+	if self.bx_constraint:
+            self.constraints[self.bx] = self.bx_constraint
 
-        if weights is not None:
-            self.set_weights(weights)
+	if self.bh_constraint:
+            self.constraints[self.bh] = self.bh_constraint
 
-        if name is not None:
-            self.set_name(name)
 
-    def set_name(self, name):
-        self.W.name = '%s_W' % name
-        self.bx.name = '%s_bx' % name
-        self.bh.name = '%s_bh' % name
+        if self.initial_weights is not None:
+            self.set_weights(self.initial_weights)
+	    del self.initial_weights
 
-    @property
-    def nb_input(self):
-        return 1
+    def call(self, x, mask=None):
+	y = K.dot(self.W, x) + self.bx
+	output = self.activation(y)
+	
+	return output
 
-    @property
-    def nb_output(self):
-        return 0 # RBM has no output, use get_h_given_x_layer(), get_x_given_h_layer() instead
-
-    def get_input(self, train=False):
-        return self.input
-
-    def get_output(self, train=False):
-        return None # RBM has no output, use get_h_given_x_layer(), get_x_given_h_layer() instead
+    def get_output_shape_for(self, input_shape):
+        assert input_shape and len(input_shape) == 2
+	return (input_shape[0], self.hidden_dim)
 
     def get_config(self):
-        return {"name": self.__class__.__name__,
-                "input_dim": self.input_dim,
-                "hidden_dim": self.hidden_dim,
-                "init": self.init.__name__,
-                "W_regularizer": self.W_regularizer.get_config() if self.W_regularizer else None,
-                "bx_regularizer": self.bx_regularizer.get_config() if self.bx_regularizer else None,
-                "bh_regularizer": self.bh_regularizer.get_config() if self.bh_regularizer else None,
-                #"activity_regularizer": self.activity_regularizer.get_config() if self.activity_regularizer else None,
-                "W_constraint": self.W_constraint.get_config() if self.W_constraint else None,
-                "bx_constraint": self.bx_constraint.get_config() if self.bx_constraint else None,
-                "bh_constraint": self.bh_constraint.get_config() if self.bh_constraint else None}
+	config = {'output_dim': self.hidden_dim,
+                  'init': self.init.__name__,
+                  'activation': self.activation.__name__,
+                  'W_regularizer': self.W_regularizer.get_config() if self.W_regularizer else None,
+                  'bx_regularizer': self.bx_regularizer.get_config() if self.bx_regularizer else None,
+		   'bh_regularizer': self.bh_regularizer.get_config() if self.bh_regularizer else None,
+                  'activity_regularizer': self.activity_regularizer.get_config() if self.activity_regularizer else None,
+                  'W_constraint': self.W_constraint.get_config() if self.W_constraint else None,
+                  'bx_constraint': self.bx_constraint.get_config() if self.bx_constraint else None,
+		  'bh_constraint': self.bh_constraint.get_config() if self.bh_constraint else None,
+                  'persistent': self.is_persistent,
+                  'input_dim': self.input_dim}
+        base_config = super(Dense, self).get_config()
+        return dict(list(base_config.items()) + list(config.items()))
 
-    # persistence, copied from keras.models.Sequential
-    def save_weights(self, filepath, overwrite=False):
-        # Save weights to HDF5
-        import h5py
-        import os.path
-        # if file exists and should not be overwritten
-        if not overwrite and os.path.isfile(filepath):
-            import sys
-            get_input = input
-            if sys.version_info[:2] <= (2, 7):
-                get_input = raw_input
-            overwrite = get_input('[WARNING] %s already exists - overwrite? [y/n]' % (filepath))
-            while overwrite not in ['y', 'n']:
-                overwrite = get_input('Enter "y" (overwrite) or "n" (cancel).')
-            if overwrite == 'n':
-                return
-            print('[TIP] Next time specify overwrite=True in save_weights!')
-
-        f = h5py.File(filepath, 'w')
-        weights = self.get_weights()
-        f.attrs['nb_params'] = len(weights)
-        for n, param in enumerate(weights):
-            param_name = 'param_{}'.format(n)
-            param_dset = f.create_dataset(param_name, param.shape, dtype=param.dtype)
-            param_dset[:] = param
-        f.flush()
-        f.close()
-
-    def load_weights(self, filepath):
-        # Loads weights from HDF5 file
-        import h5py
-        f = h5py.File(filepath)
-        weights = [f['param_{}'.format(p)] for p in range(f.attrs['nb_params'])]
-        self.set_weights(weights)
-        f.close()
-    
     # -------------
     # RBM internals
     # -------------
@@ -159,11 +168,12 @@ class RBM(Layer):
            p(h_j=1|x) = sigmoid(x^T W[:,j] + bh_j).
         """
         h_pre = K.dot(x, self.W) + self.bh          # pre-sigmoid (used in cross-entropy error calculation for better numerical stability)
-        h_sigm = K.sigmoid(h_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
+        #h_sigm = K.sigmoid(h_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
+	h_sigm = self.activation(self.scaling_h_given_x * h_pre)
         h_samp = random_binomial(shape=h_sigm.shape, n=1, p=h_sigm)
-                                                    # random sample
-                                                    #   \hat{h} = 1,      if p(h=1|x) > uniform(0, 1)
-                                                    #             0,      otherwise
+                            # random sample
+                            #   \hat{h} = 1,      if p(h=1|x) > uniform(0, 1)
+                            #             0,      otherwise
         # pre and sigm are returned to compute cross-entropy
         return h_samp, h_pre, h_sigm
 
@@ -176,8 +186,9 @@ class RBM(Layer):
         """
 
         x_pre = K.dot(h, self.W.T) + self.bx        # pre-sigmoid (used in cross-entropy error calculation for better numerical stability)
-        x_sigm = K.sigmoid(x_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
-        x_samp = random_binomial(shape=x_sigm.shape, n=1, p=x_sigm)
+        x_sigm = K.sigmoid(self.scaling_x_given_h  * x_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
+        #x_sigm = self.activation(x_pre)
+	x_samp = random_binomial(shape=x_sigm.shape, n=1, p=x_sigm)
                                                     # random sample
                                                     #   \hat{x} = 1,      if p(x=1|h) > uniform(0, 1)
                                                     #             0,      otherwise
@@ -215,20 +226,33 @@ class RBM(Layer):
 
         return x_rec, x_rec_pre, x_rec_sigm
 
-    def contrastive_divergence_loss(self, nb_gibbs_steps=1):
+    def contrastive_divergence_loss(self, x, dummy):
         """
         Compute contrastive divergence loss with k steps of Gibbs sampling (CD-k).
 
         Result is a Theano expression with the form loss = f(x).
         """
-        def loss(x):
-            x_rec, _, _ = self.mcmc_chain(x, nb_gibbs_steps)
+
+	if(self.is_persistent):
+		#self.persistent_chain = theano.shared(np.random.randint(0, 1, (self.batch_size, self.input_dim)).astype('f'), borrow=True)
+		#self.persistent_chain = theano.shared(np.zeros((self.batch_size, self.input_dim)).astype('f'), borrow=True)
+		chain_start = self.persistent_chain
+	else:
+		chain_start = x
+
+        def loss(chain_start, x):
+	    x_rec, _, _ = self.mcmc_chain(chain_start, self.nb_gibbs_steps)
             cd = K.mean(self.free_energy(x)) - K.mean(self.free_energy(x_rec))
-            return cd
+            return cd, x_rec
 
-        return loss
+	y, x_rec = loss(chain_start, x)
+	
+	if(self.is_persistent):
+		self.updates = [(self.persistent_chain, x_rec)]
 
-    def reconstruction_loss(self, nb_gibbs_steps=1):
+        return y
+
+    def reconstruction_loss(self, x, dummy):
         """
         Compute binary cross-entropy between the binary input data and the reconstruction generated by the model.
 
@@ -239,8 +263,7 @@ class RBM(Layer):
         """
 
         def loss(x):
-            _, pre, _ = self.mcmc_chain(x, nb_gibbs_steps)
-
+            _, pre, _ = self.mcmc_chain(x, self.nb_gibbs_steps)
             # NOTE:
             #   when computing log(sigmoid(x)) and log(1 - sigmoid(x)) of cross-entropy, 
             #   if x is very big negative, sigmoid(x) will be 0 and log(0) will be nan or -inf
@@ -255,10 +278,11 @@ class RBM(Layer):
             #   not sure how important this is; in most cases seems to work fine using just T.nnet.binary_crossentropy() 
             #   for instance; keras.objectives.binary_crossentropy() simply clips the value entering the log(); and 
             #   this is only used for monitoring, not calculating gradient
-            cross_entropy_loss = -T.mean(T.sum(x*T.log(T.nnet.sigmoid(pre)) + (1 - x)*T.log(1 - T.nnet.sigmoid(pre)), axis=1))
-
+            #cross_entropy_loss = -T.mean(T.sum(x*T.log(T.nnet.sigmoid(pre)) + (1 - x)*T.log(1 - T.nnet.sigmoid(pre)), axis=1))
+	    cross_entropy_loss = -T.mean(T.sum(x*T.log(self.activation(pre)) + (1 - x)*T.log(1 - self.activation(pre)), axis=1))
             return cross_entropy_loss
-        return loss
+	y = loss(x)
+        return y
 
     def free_energy_gap(self, x_train, x_test):
         """
@@ -288,9 +312,9 @@ class RBM(Layer):
         Generates a new Dense Layer that computes mean of Bernoulli distribution p(h|x), ie. p(h=1|x).
         """
         if  as_initial_layer:
-            layer = Dense(input_dim=self.input_dim, output_dim=self.hidden_dim, activation='sigmoid', weights=[self.W.get_value(), self.bh.get_value()])
+            layer = Dense(input_dim=self.input_dim, output_dim=self.hidden_dim, activation=self.activation, weights=[self.W.get_value(), self.bh.get_value()])
         else:
-            layer = Dense(output_dim=self.hidden_dim, activation='sigmoid', weights=[self.W.get_value(), self.bh.get_value()])
+            layer = Dense(output_dim=self.hidden_dim, activation=self.activation, weights=[self.W.get_value(), self.bh.get_value()])
         return layer
 
     def get_x_given_h_layer(self, as_initial_layer=False):
@@ -302,6 +326,14 @@ class RBM(Layer):
         else:
             layer = Dense(output_dim=self.input_dim, activation='sigmoid', weights=[self.W.get_value().T, self.bx.get_value()])
         return layer
+
+    def return_reconstruction_data(self, x):
+	def re_sample(x):
+            x_rec, pre, _ = self.mcmc_chain(x, self.nb_gibbs_steps)
+            return x_rec
+	y = re_sample(x)
+        return y
+
 
 
 
@@ -318,13 +350,22 @@ class GBRBM(RBM):
     See: Hinton, "A Practical Guide to Training Restricted Boltzmann Machines", UTML TR 2010-003, 2010, section 13.2.
     """
 
-    def __init__(self, input_dim, hidden_dim, init='glorot_uniform', weights=None, name=None,
-                 W_regularizer=None, bx_regularizer=None, bh_regularizer=None, #activity_regularizer=None,
-                 W_constraint=None, bx_constraint=None, bh_constraint=None):
-
-        super(GBRBM, self).__init__(input_dim, hidden_dim, init, weights, name,
-        W_regularizer, bx_regularizer, bh_regularizer, #activity_regularizer,
-        W_constraint, bx_constraint, bh_constraint)
+    def __init__(self, hidden_dim, init='glorot_uniform', 
+		activation='sigmoid', weights=None, 
+		W_regularizer=None, bx_regularizer=None, bh_regularizer=None, 
+		activity_regularizer=None,
+                W_constraint=None, bx_constraint=None, bh_constraint=None,
+		input_dim=None, nb_gibbs_steps=1, persistent=True, batch_size=1,		scaling_h_given_x=1.0, scaling_x_given_h=1.0,
+		**kwargs):
+	
+	self.nb_gibbs_steps=nb_gibbs_steps
+        super(GBRBM, self).__init__(hidden_dim=hidden_dim, init=init, 
+				    activation=activation, weights=weights,
+				    input_dim=input_dim, nb_gibbs_steps=nb_gibbs_steps, 
+				    scaling_h_given_x=scaling_h_given_x,
+				    scaling_x_given_h=scaling_x_given_h,
+				    persistent=persistent, batch_size=batch_size,
+				    **kwargs)
 
     # inherited RBM functions same as BB-RBM
 
@@ -347,7 +388,7 @@ class GBRBM(RBM):
            p(x_i|h) = norm(x_i; sigma_i W[i,:] h + bx_i, sigma_i^2).
         """
         x_mean = K.dot(h, self.W.T) + self.bx
-        x_samp = x_mean
+        x_samp = self.scaling_x_given_h  * x_mean
                 # variances of the Gaussian units are not learned, 
                 # instead we fix them to 1 in the energy function
                 # here, instead of sampling from the Gaussian distributions, 
@@ -358,7 +399,7 @@ class GBRBM(RBM):
     # gibbs_xhx() same as BB-RBM
     # mcmc_chain() same as BB-RBM
 
-    def reconstruction_loss(self, nb_gibbs_steps=1):
+    def reconstruction_loss(self, x, dummy):
         """
         Compute mean squared error between input data and the reconstruction generated by the model.
 
@@ -368,10 +409,10 @@ class GBRBM(RBM):
         Mean over samples and feature dimensions.
         """
         def loss(x):
-            x_rec, _, _ = self.mcmc_chain(x, nb_gibbs_steps)
+            x_rec, _, _ = self.mcmc_chain(x, self.nb_gibbs_steps)
 
-            return K.mean(K.sqr(x - x_rec))
-        return loss
+            return K.mean(K.sqrt(x - x_rec))
+        return loss(x)
 
     # free_energy_gap() same as BB-RBM
 

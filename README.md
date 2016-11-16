@@ -1,10 +1,19 @@
-# A collection of small extensions to Keras
+# keras_extension_alt
+Adapted from wuaalb/keras_extension
 
-Extensions
+A collection of small extensions to Keras (alternated keras extensions)
 
+This library is taken over keras extension for applying latest 1.1.1
+
+Original extensions:
 - Restricted Boltzmann Machine (RBM)
 - Gaussian-Bernoulli Restricted Boltzmann Machine (GB-RBM)
-- Momentum schedule
-- Logging helpers (simultaneous logging to console and log file)
 
-Note that some of these extensions are very coupled to Keras' internals which change from time to time. Whenever these extensions break due to changes in Keras, either the extensions need to be updated to reflect the changes, or an older version of Keras should be used.
+New added:
+ - Persistent Contrastive divergence
+ - optional activation impletemented (e.g. relu)
+
+How to install:
+ 1. install Keras library
+ 2. clone keras_extension_alt library
+ 3. excute command "python setup.py install"

@@ -3,11 +3,11 @@ from setuptools import find_packages
 
 
 setup(name='keras_extensions',
-      version='0.1',
+      version='1.0',
       description='Some Keras extensions',
-      author='Merlijn Blaauw',
+      author='Yoshiaki Takahashi',
       author_email='',
-      url='https://github.com/wuaalb/keras_extensions',
+      url='https://github.com/bnsnapper/keras_extensions_alt',
       download_url='',
       license='MIT',
       install_requires=[],
