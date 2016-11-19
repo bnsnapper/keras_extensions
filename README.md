@@ -8,7 +8,7 @@ This library is taken over keras extension for applying latest keras 1.1.1
 - Restricted Boltzmann Machine (RBM)
 - Gaussian-Bernoulli Restricted Boltzmann Machine (GB-RBM)
 
-[New added:]
+[Newly added:]
  - Persistent Contrastive divergence
  - Dropout for activation 
  - Gaussian-NReLU Restricted Boltzmann Machine (GNRRBM)
