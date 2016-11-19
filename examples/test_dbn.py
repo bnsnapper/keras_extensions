@@ -15,7 +15,10 @@ from keras_extensions.initializations import glorot_uniform_sigm
 
 # configuration
 input_dim = 100
-hidden_dim=[500, 200, 50]
+hidden_dim = [500, 200, 50]
+
+dropouts = [0.3, 0.2, 0.1]
+
 batch_size = 10
 nb_epoch = [30, 15, 15]
 nb_gibbs_steps = 10
@@ -36,16 +39,19 @@ def main():
     # setup model structure
     print('Creating training model...')
     rbm1=GBRBM(hidden_dim[0], input_dim=input_dim, init=glorot_uniform_sigm,
-	       activation='sigmoid', nb_gibbs_steps=nb_gibbs_steps, 
-	       persistent=True, batch_size=batch_size)
+	       activation='relu', nb_gibbs_steps=nb_gibbs_steps, 
+	       persistent=True, batch_size=batch_size,
+	       dropout=dropouts[0])
     rbm2=RBM(hidden_dim[1], input_dim=hidden_dim[0], init=glorot_uniform_sigm,
- 	     activation='sigmoid', nb_gibbs_steps=nb_gibbs_steps, 
-	     persistent=True, batch_size=batch_size)
+ 	     activation='relu', nb_gibbs_steps=nb_gibbs_steps, 
+	     persistent=True, batch_size=batch_size,
+	     dropout=dropouts[1])
     rbm3=RBM(hidden_dim[2], input_dim=hidden_dim[1], init=glorot_uniform_sigm,
- 	     activation='sigmoid', nb_gibbs_steps=nb_gibbs_steps, 
-	     persistent=True, batch_size=batch_size)
+ 	     activation='relu', nb_gibbs_steps=nb_gibbs_steps, 
+	     persistent=True, batch_size=batch_size,
+	     dropout=dropouts[2])
     rbms=[rbm1, rbm2, rbm3]
-    dbn = DBN(rbms)
+    dbn = DBN(rbms, hidden_unit_type='binary')
 
     # setup optimizer, loss
     def get_layer_loss(rbm,layer_no):

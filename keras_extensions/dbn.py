@@ -9,6 +9,7 @@ from keras_extensions.layers import SampleBernoulli
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from keras.models import Sequential
 from keras.optimizers import SGD
+from keras.layers.core import Dense, Activation, Dropout
 from keras.utils.io_utils import HDF5Matrix
 #from keras_extensions.models import SingleLayerUnsupervised
 
@@ -17,8 +18,9 @@ import keras.backend as K
 class DBN(object):
     
 
-    def __init__(self, rbms):
+    def __init__(self, rbms, hidden_unit_type='binary'):
         self.rbms = rbms
+	self.hidden_unit_type = hidden_unit_type
 
         # biases
         self.bs = []
@@ -93,12 +95,19 @@ class DBN(object):
 	   ins = self.X
 	else:
            pre_model = Sequential()
-           for i,rbm in enumerate(self.rbms[0:layer_no]):
+           
+	   for i,rbm in enumerate(self.rbms[0:layer_no]):
               pre_model.add(rbm.get_h_given_x_layer((i==0)))
-              pre_model.add(SampleBernoulli(mode='random'))
+	      
+	      if(self.hidden_unit_type == 'nrlu'):
+	      	 pre_model.add(SampleBernoulli(mode='nrlu'))
+	      else:
+                 pre_model.add(SampleBernoulli(mode='random'))
+	      
            pre_model.compile(SGD(),loss='mean_squared_error')
 	   ins = pre_model.predict(self.X)
         
+	input_dim = self.rbms[layer_no].input_dim
         # preparing model
         #model = SingleLayerUnsupervised()
 	model = Sequential()
@@ -108,6 +117,7 @@ class DBN(object):
         opt  = self.get_layer_optimizer(layer_no)
 
         model.compile(optimizer=opt, loss=loss, metrics=metrics)
+	model.summary()
 
         model.fit(
             ins,ins,

@@ -1,17 +1,18 @@
-# keras_extension_alt
-Adapted from wuaalb/keras_extension
-
+# keras_extension
 A collection of small extensions to Keras (alternated keras extensions)
 
-This library is taken over keras extension for applying latest 1.1.1
+Adapted from wuaalb/keras_extension
+This library is taken over keras extension for applying latest keras 1.1.1
 
-Original extensions:
+[Original extensions:]
 - Restricted Boltzmann Machine (RBM)
 - Gaussian-Bernoulli Restricted Boltzmann Machine (GB-RBM)
 
-New added:
+[New added:]
  - Persistent Contrastive divergence
- - optional activation impletemented (e.g. relu)
+ - Dropout for activation 
+ - Gaussian-NReLU Restricted Boltzmann Machine (GNRRBM)
+ - optional activation (e.g. relu)
 
 How to install:
  1. install Keras library

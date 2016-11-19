@@ -4,6 +4,7 @@ import numpy as np
 import theano
 import theano.tensor as T
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+from keras_extensions.activations import nrlu
 
 class SampleBernoulli(Layer):
     """
@@ -40,5 +41,7 @@ class SampleBernoulli(Layer):
             # draw mean-field approximation sample from Bernoulli distribution
             #    x* = E[p(x)] = E[Bern(x; p)] = p
             return x
+	elif self.mode == 'nrlu':
+            return nrlu(x)
         else:
             raise NotImplementedError('Unknown sample mode!')

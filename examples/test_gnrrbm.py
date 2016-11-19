@@ -10,7 +10,7 @@ from keras.models import Sequential, Model
 from keras.optimizers import SGD
 
 from keras_extensions.logging import log_to_file
-from keras_extensions.rbm import GBRBM
+from keras_extensions.rbm import GNRRBM
 from keras_extensions.layers import SampleBernoulli
 from keras_extensions.initializations import glorot_uniform_sigm
 
@@ -20,7 +20,7 @@ input_dim = 100
 hidden_dim = 200
 batch_size = 10
 nb_epoch = 15
-nb_gibbs_steps = 10
+nb_gibbs_steps = 1 # should be 1 for Gausian-NRelu units
 lr = 0.001  # small learning rate for GB-RBM
 
 @log_to_file('example.log')
@@ -38,11 +38,11 @@ def main():
     
     # setup model structure
     print('Creating training model...')
-    rbm = GBRBM(hidden_dim, input_dim=input_dim,
+    rbm = GNRRBM(hidden_dim, input_dim=input_dim,
 		init=glorot_uniform_sigm,
-		activation='relu',
+		activation='sigmoid',
 		nb_gibbs_steps=nb_gibbs_steps,
-		persistent=True,
+		persistent=False,
 		batch_size=batch_size,
 		dropout=0.0)
 

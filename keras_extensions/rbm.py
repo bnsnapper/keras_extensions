@@ -13,9 +13,10 @@ from keras import activations, initializations, regularizers, constraints
 from keras import backend as K
 from keras.engine import InputSpec, Layer
 from keras.layers.core import Dense
-from keras_extensions.initializations import glorot_uniform_sigm 
+from keras_extensions.initializations import glorot_uniform_sigm
+from keras_extensions.activations import nrlu
 
-from .backend import random_binomial
+from .backend import random_binomial, random_normal
 
 import theano
 import theano.tensor as T
@@ -35,7 +36,13 @@ class RBM(Layer):
                 W_constraint=None, bx_constraint=None, bh_constraint=None,
 		input_dim=None, nb_gibbs_steps=1, persistent=False, batch_size=1,
 		scaling_h_given_x=1.0, scaling_x_given_h=1.0,
+		dropout=0.0,
 		**kwargs):
+
+	self.p = dropout
+	if(0.0 < self.p < 1.0): 
+             self.uses_learning_phase = True 
+        self.supports_masking = True 
 
 	self.nb_gibbs_steps=nb_gibbs_steps
 
@@ -77,6 +84,10 @@ class RBM(Layer):
 	self.is_persistent = persistent
 	if(self.is_persistent):
 		self.persistent_chain = theano.shared(np.zeros((self.batch_size, self.input_dim), dtype=theano.config.floatX), borrow=True)
+
+    def _get_noise_shape(self, x): 
+        return None 
+
 
     def build(self, input_shape):
 	assert len(input_shape) == 2
@@ -170,11 +181,17 @@ class RBM(Layer):
         h_pre = K.dot(x, self.W) + self.bh          # pre-sigmoid (used in cross-entropy error calculation for better numerical stability)
         #h_sigm = K.sigmoid(h_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
 	h_sigm = self.activation(self.scaling_h_given_x * h_pre)
+
+	# drop out noise
+	if(0.0 < self.p < 1.0):
+             noise_shape = self._get_noise_shape(h_sigm)
+             h_sigm = K.in_train_phase(K.dropout(h_sigm, self.p, noise_shape), h_sigm)
+
         h_samp = random_binomial(shape=h_sigm.shape, n=1, p=h_sigm)
                             # random sample
                             #   \hat{h} = 1,      if p(h=1|x) > uniform(0, 1)
                             #             0,      otherwise
-        # pre and sigm are returned to compute cross-entropy
+
         return h_samp, h_pre, h_sigm
 
     def sample_x_given_h(self, h):
@@ -184,14 +201,18 @@ class RBM(Layer):
         For Bernoulli RBM the conditional probability distribution can be derived to be 
            p(x_i=1|h) = sigmoid(W[i,:] h + bx_i).
         """
-
-        x_pre = K.dot(h, self.W.T) + self.bx        # pre-sigmoid (used in cross-entropy error calculation for better numerical stability)
-        x_sigm = K.sigmoid(self.scaling_x_given_h  * x_pre)              # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
-        #x_sigm = self.activation(x_pre)
+        # pre-sigmoid (used in cross-entropy error calculation for better numerical stability)
+        x_pre = K.dot(h, self.W.T) + self.bx        
+        
+        # mean of Bernoulli distribution ('p', prob. of variable taking value 1), sometimes called mean-field value
+        x_sigm = K.sigmoid(self.scaling_x_given_h  * x_pre)             
+        #x_sigm = self.activation(self.scaling_x_given_h * x_pre)
+	
 	x_samp = random_binomial(shape=x_sigm.shape, n=1, p=x_sigm)
-                                                    # random sample
-                                                    #   \hat{x} = 1,      if p(x=1|h) > uniform(0, 1)
-                                                    #             0,      otherwise
+        # random sample
+        #   \hat{x} = 1,      if p(x=1|h) > uniform(0, 1)
+        #             0,      otherwise
+
         # pre and sigm are returned to compute cross-entropy
         return x_samp, x_pre, x_sigm
 
@@ -278,8 +299,8 @@ class RBM(Layer):
             #   not sure how important this is; in most cases seems to work fine using just T.nnet.binary_crossentropy() 
             #   for instance; keras.objectives.binary_crossentropy() simply clips the value entering the log(); and 
             #   this is only used for monitoring, not calculating gradient
-            #cross_entropy_loss = -T.mean(T.sum(x*T.log(T.nnet.sigmoid(pre)) + (1 - x)*T.log(1 - T.nnet.sigmoid(pre)), axis=1))
-	    cross_entropy_loss = -T.mean(T.sum(x*T.log(self.activation(pre)) + (1 - x)*T.log(1 - self.activation(pre)), axis=1))
+            cross_entropy_loss = -T.mean(T.sum(x*T.log(T.nnet.sigmoid(pre)) + (1 - x)*T.log(1 - T.nnet.sigmoid(pre)), axis=1))
+	    #cross_entropy_loss = -T.mean(T.sum(x*T.log(self.activation(pre)) + (1 - x)*T.log(1 - self.activation(pre)), axis=1))
             return cross_entropy_loss
 	y = loss(x)
         return y
@@ -356,6 +377,7 @@ class GBRBM(RBM):
 		activity_regularizer=None,
                 W_constraint=None, bx_constraint=None, bh_constraint=None,
 		input_dim=None, nb_gibbs_steps=1, persistent=True, batch_size=1,		scaling_h_given_x=1.0, scaling_x_given_h=1.0,
+		dropout=0.0,
 		**kwargs):
 	
 	self.nb_gibbs_steps=nb_gibbs_steps
@@ -365,6 +387,7 @@ class GBRBM(RBM):
 				    scaling_h_given_x=scaling_h_given_x,
 				    scaling_x_given_h=scaling_x_given_h,
 				    persistent=persistent, batch_size=batch_size,
+				    dropout=dropout,
 				    **kwargs)
 
     # inherited RBM functions same as BB-RBM
@@ -426,3 +449,76 @@ class GBRBM(RBM):
         else:
             layer = Dense(input_dim=self.hidden_dim, output_dim=self.input_dim, activation='linear', weights=[self.W.get_value().T, self.bx.get_value()])
         return layer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class GNRRBM(GBRBM):
+    def __init__(self, hidden_dim, init='glorot_uniform', 
+		activation='sigmoid', weights=None, 
+		W_regularizer=None, bx_regularizer=None, bh_regularizer=None, 
+		activity_regularizer=None,
+                W_constraint=None, bx_constraint=None, bh_constraint=None,
+		input_dim=None, nb_gibbs_steps=1, persistent=True, batch_size=1,		
+		scaling_h_given_x=1.0, scaling_x_given_h=1.0,
+		dropout=0.0,
+		**kwargs):
+	
+	self.nb_gibbs_steps=nb_gibbs_steps
+        super(GNRRBM, self).__init__(hidden_dim=hidden_dim, init=init, 
+				    activation=activation, weights=weights,
+				    input_dim=input_dim, nb_gibbs_steps=1, 
+				    scaling_h_given_x=scaling_h_given_x,
+				    scaling_x_given_h=scaling_x_given_h,
+				    persistent=False, batch_size=batch_size,
+				    dropout=dropout,
+				    **kwargs)
+
+    # inherited RBM functions same as BB-RBM
+
+    # -------------
+    # RBM internals
+    # -------------
+    
+    def sample_h_given_x(self, x):
+
+        h_pre = K.dot(x, self.W) + self.bh
+	h_sigm = K.maximum(self.scaling_h_given_x * h_pre, 0)
+	#std = K.mean(K.sigmoid(self.scaling_h_given_x * h_pre))
+	#eta = random_normal(shape=h_pre.shape, std=std)
+	#h_samp = K.maximum(h_pre + eta, 0)
+	h_samp = nrlu(h_pre)
+
+        return h_samp, h_pre, h_sigm
+
+    def sample_x_given_h(self, h):
+
+        x_mean = K.dot(h, self.W.T) + self.bx
+        x_samp = self.scaling_x_given_h  * x_mean
+
+        return x_samp, x_samp, x_samp
+
+
+def get_h_given_x_layer(self, as_initial_layer=False):
+        """
+        Generates a new Dense Layer that computes mean of Bernoulli distribution p(h|x), ie. p(h=1|x).
+        """
+        if  as_initial_layer:
+            layer = Dense(input_dim=self.input_dim, output_dim=self.hidden_dim, activation="relu", weights=[self.W.get_value(), self.bh.get_value()])
+        else:
+            layer = Dense(output_dim=self.hidden_dim, activation="relu", weights=[self.W.get_value(), self.bh.get_value()])
+        return layer
+
